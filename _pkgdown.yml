@@ -61,6 +61,7 @@ reference:
       - simulate_polygenic_trait
       - sim_multi_traits
       - sim_single_trait_simple
+      - simulate_phenotype
 
   - title: "Summary Statistics"
     desc: "Functions for simulating and calculating summary statistics"
@@ -95,6 +96,13 @@ reference:
     contents:
       - compute_s2g
       - get_lower_chol
+
+articles:
+  - title: "Phenotype Simulation"
+    desc: "Tutorials for simulating phenotypes with various genetic architectures"
+    contents:
+    - sparse_phenotype_simulation
+    - cis_qtl_simulation
 
 footer:
   structure:

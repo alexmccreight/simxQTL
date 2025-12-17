@@ -4,7 +4,13 @@
 \alias{simulate_sparse_effects}
 \title{Simulate Sparse Effects for eQTL Data}
 \usage{
-simulate_sparse_effects(G, h2_sparse, n_sparse, effect_sd = 0.5)
+simulate_sparse_effects(
+  G,
+  h2_sparse,
+  n_sparse,
+  effect_sd = 0.5,
+  valid_cols = NULL
+)
 }
 \arguments{
 \item{G}{A standardized genotype matrix.}
