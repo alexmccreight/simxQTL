@@ -237,6 +237,11 @@ generate_cis_qtl_data <- function(G,
   attempt <- 0
   ld_satisfied <- FALSE
 
+  # Set initial seed if provided
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
   while (!ld_satisfied && attempt < max_attempts) {
     attempt <- attempt + 1
 
