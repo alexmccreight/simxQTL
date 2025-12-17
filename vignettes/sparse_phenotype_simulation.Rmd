@@ -1,0 +1,95 @@
+---
+title: "Simulating Sparse Phenotypes"
+author: "Alex McCreight"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Simulating Sparse Phenotypes}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE,comment = "#",fig.width = 5,
+                      fig.height = 3,fig.align = "center",
+                      dpi = 120)
+```
+
+This vignette demonstrates how to use the `simulate_phenotype()` function to simulate a sparse architecture, with control over:
+
+- The number of causal variants
+- Per-SNP heritability
+- Whether causal variants should be in low linkage disequilibrium (LD) with each other
+
+## Data
+
+```{r}
+library(simxQTL)
+set.seed(1)
+
+# Simulate genotype matrix (500 individuals x 100 SNPs)
+G <- matrix(rbinom(500 * 100, size = 2, prob = 0.3), nrow = 500, ncol = 100)
+
+# Standardize the genotype matrix
+G <- scale(G)
+```
+
+## Simulate Phenotype
+
+Now we use `simulate_phenotype()` to generate a phenotype with 3 independent causal variants, each explaining 5% of phenotypic variance:
+
+```{r simulate}
+result <- simulate_phenotype(
+  X = G,
+  n_causal = 3,
+  h2_per_snp = 0.05,
+  independent = TRUE
+)
+```
+
+**Key parameters:**
+
+- `n_causal`: Number of causal variants to simulate
+- `h2_per_snp`: Heritability contributed by each causal SNP (total h2 = n_causal * h2_per_snp)
+- `independent`: If `TRUE`, causal SNPs are constrained to have low LD (|r| < 0.15) with each other
+
+## Examine Output
+
+The function returns a list with all simulation components:
+
+```{r output}
+# Output structure
+names(result)
+
+# Phenotype vector
+head(result$y)
+
+# Indices of causal variants
+result$causal
+
+# Effect sizes (non-zero for causal variants)
+result$beta[result$causal]
+
+# Heritability
+cat("Total heritability:", result$h2_total, "\n")
+cat("Per-SNP heritability:", result$h2_per_snp, "\n")
+```
+
+## Visualize Effect Sizes
+
+We can visualize the effect sizes, highlighting the causal variants:
+
+```{r plot-effects}
+plot(abs(result$beta), ylab = "Absolute Effect Size", xlab = "SNP Index", pch = 16)
+points(which(result$beta != 0), abs(result$beta[result$beta != 0]), col = 2, pch = 16)
+```
+
+## Verify LD Constraint
+
+We can verify the causal variants have low LD when `independent = TRUE`:
+
+```{r verify}
+# Check LD among causal variants
+causal_cor <- cor(G[, result$causal])
+print(round(causal_cor, 3))
+```

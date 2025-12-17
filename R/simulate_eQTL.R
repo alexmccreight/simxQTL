@@ -13,13 +13,18 @@
 #'   \item{beta}{A vector of effect sizes with nonzero entries for the sparse SNPs.}
 #'   \item{sparse_indices}{Indices of the sparse SNPs.}
 #' @keywords internal
-simulate_sparse_effects <- function(G, h2_sparse, n_sparse, effect_sd = 0.5) {
+simulate_sparse_effects <- function(G, h2_sparse, n_sparse, effect_sd = 0.5, valid_cols = NULL) {
   n_features <- ncol(G)
   beta <- rep(0, n_features)
 
-  # Select sparse SNPs
-  if (n_sparse > 0) {
-    sparse_indices <- sample(1:n_features, n_sparse)
+  # Use valid columns if provided, otherwise use all
+  if (is.null(valid_cols)) {
+    valid_cols <- 1:n_features
+  }
+
+  # Select sparse SNPs from valid columns only
+  if (n_sparse > 0 && length(valid_cols) >= n_sparse) {
+    sparse_indices <- sample(valid_cols, n_sparse)
 
     # Draw effects from normal distribution with specified SD
     beta[sparse_indices] <- rnorm(n_sparse, mean = 0, sd = effect_sd)
@@ -123,10 +128,10 @@ simulate_infinitesimal_effects <- function(G, h2_infinitesimal, infinitesimal_in
     beta[infinitesimal_indices] <- rnorm(n_inf, mean = 0, sd = effect_sd)
 
     # Scale to exactly match h2_infinitesimal
-    inf_effects <- as.vector(G[, infinitesimal_indices] %*% beta[infinitesimal_indices])
+    inf_effects <- as.vector(G[, infinitesimal_indices, drop = FALSE] %*% beta[infinitesimal_indices])
     current_var <- var(inf_effects)
 
-    if (current_var > 0) {
+    if (current_var > 0 && !is.na(current_var)) {
       scaling_factor <- sqrt(h2_infinitesimal / current_var)
       beta[infinitesimal_indices] <- beta[infinitesimal_indices] * scaling_factor
     }
@@ -166,47 +171,47 @@ is_causal_power <- function(G, beta, residual_variance, power = 0.80) {
 }
 
 ###############################################################################
-#' Generate Cis-QTL Data with Multiple Genetic Architecture Components
+#' Generate eQTL Data with Multiple Genetic Architecture Components
 #'
-#' This function generates simulated cis-eQTL data with a partitioned
-#' genetic architecture that enforces strict effect size hierarchies:
-#' |sparse| > |oligogenic| >> |infinitesimal|
+#' This function generates simulated gene expression data
 #'
-#' Originally developed for the "susieR 2.0" manuscript, McCreight et al (2025).
-#'
-#' @param G Genotype matrix.
+#' @param G Standardized genotype matrix (samples x SNPs).
 #' @param h2g Total SNP heritability (proportion of variance explained by genotyped SNPs).
 #' @param prop_h2_sparse Proportion of h2g explained by sparse effects.
 #' @param prop_h2_oligogenic Proportion of h2g explained by oligogenic effects.
 #' @param prop_h2_infinitesimal Proportion of h2g explained by infinitesimal effects.
 #' @param n_sparse Number of sparse SNPs.
 #' @param n_oligogenic Number of oligogenic SNPs to simulate.
+#' @param n_inf Number of infinitesimal SNPs to simulate. If NULL (default), all remaining SNPs after sparse and oligogenic selection receive infinitesimal effects.
 #' @param mixture_props Mixture proportions for oligogenic effects (must sum to 1). Default c(0.75, 0.25) means 75% smaller effects, 25% larger effects.
 #' @param sparse_sd Standard deviation for drawing sparse effects (default 0.5).
 #' @param oligo_sds Standard deviations for oligogenic mixture components (default c(0.05, 0.15)).
 #' @param inf_sd Standard deviation for drawing infinitesimal effects (default 0.01).
 #' @param standardize Logical; if TRUE, the genotype matrix will be standardized.
-#' @param independent Logical; if TRUE, ensures all sparse and oligogenic SNPs have |r| < 0.15 with each other (default FALSE).
-#' @param verbose Logical; if TRUE, prints progress messages including LD constraint attempts (default FALSE).
+#' @param independent Logical; if TRUE, ensures all sparse and oligogenic SNPs have |r| < ld_threshold with each other (default TRUE).
+#' @param ld_threshold Numeric; maximum allowed absolute correlation between causal variants when independent = TRUE (default 0.15).
+#' @param max_attempts Integer; maximum number of attempts to find SNPs satisfying LD constraints (default 200).
 #' @param seed Optional seed for reproducibility.
 #' @return A list containing the standardized genotype matrix, simulated phenotype,
 #'   combined beta values, indices for each effect component, realized heritability estimates,
 #'   effect size ranges, hierarchy validation results, and causal indices.
 #' @export
 generate_cis_qtl_data <- function(G,
-                               h2g = 0.30,
+                               h2g = 0.25,
                                prop_h2_sparse = 0.50,
-                               prop_h2_oligogenic = 0.15,
-                               prop_h2_infinitesimal = 0.35,
+                               prop_h2_oligogenic = 0.35,
+                               prop_h2_infinitesimal = 0.15,
                                n_sparse = 2,
-                               n_oligogenic = 10,
+                               n_oligogenic = 5,
+                               n_inf = 15,
                                mixture_props = c(0.75, 0.25),
                                sparse_sd = 0.5,
                                oligo_sds = c(0.05, 0.15),
                                inf_sd = 0.01,
                                standardize = TRUE,
                                independent = TRUE,
-                               verbose = FALSE,
+                               ld_threshold = 0.15,
+                               max_attempts = 200,
                                seed = NULL) {
   # Input validation
   if (abs(prop_h2_sparse + prop_h2_oligogenic + prop_h2_infinitesimal - 1) > 1e-6) {
@@ -214,13 +219,6 @@ generate_cis_qtl_data <- function(G,
   }
   if (abs(sum(mixture_props) - 1) > 1e-6) {
     stop("mixture_props must sum to 1.")
-  }
-
-  if (!is.null(seed)) set.seed(seed)
-
-  # Standardize genotype matrix if requested
-  if (standardize) {
-    G <- scale(G)
   }
 
   n_samples <- nrow(G)
@@ -231,26 +229,16 @@ generate_cis_qtl_data <- function(G,
   h2_oligogenic <- h2g * prop_h2_oligogenic
   h2_infinitesimal <- h2g * prop_h2_infinitesimal
 
+  # All columns are valid for selection
+  valid_cols <- 1:n_features
+
   # Setup for LD constraint checking
-  max_attempts <- if (independent) 200 else 1
+  max_attempts <- if (independent) max_attempts else 1
   attempt <- 0
   ld_satisfied <- FALSE
 
-  # Main data generation loop
-  if (verbose && independent) {
-    cat("Attempting to satisfy LD constraints:\n")
-    cat("  - Sparse SNPs: |r| < 0.15\n")
-    cat("  - Oligogenic SNPs: |r| < 0.15\n")
-    cat("  - Sparse-Oligogenic cross: |r| < 0.15\n")
-    cat("  (Safeguard: will accept results after 200 attempts)\n")
-  }
-
   while (!ld_satisfied && attempt < max_attempts) {
     attempt <- attempt + 1
-
-    if (verbose && independent && attempt > 1) {
-      cat("  Attempt", attempt, "of", max_attempts, "...\n")
-    }
 
     # Set seed for this attempt (for reproducibility)
     if (!is.null(seed) && attempt > 1) {
@@ -258,12 +246,12 @@ generate_cis_qtl_data <- function(G,
     }
 
     # 1. Sparse Effects using target-based scaling
-    sparse_res <- simulate_sparse_effects(G, h2_sparse, n_sparse, sparse_sd)
+    sparse_res <- simulate_sparse_effects(G, h2_sparse, n_sparse, sparse_sd, valid_cols)
     beta_sparse <- sparse_res$beta
     sparse_indices <- sparse_res$sparse_indices
 
     # 2. Oligogenic Effects using target-based scaling
-    non_sparse_indices <- setdiff(1:n_features, sparse_indices)
+    non_sparse_indices <- setdiff(valid_cols, sparse_indices)
     oligo_res <- simulate_oligogenic_effects(G, h2_oligogenic, n_oligogenic,
                                              mixture_props, non_sparse_indices,
                                              oligo_sds)
@@ -271,7 +259,17 @@ generate_cis_qtl_data <- function(G,
     oligogenic_indices <- oligo_res$oligogenic_indices
 
     # 3. Infinitesimal Effects using target-based scaling
-    infinitesimal_indices <- setdiff(non_sparse_indices, oligogenic_indices)
+    infinitesimal_pool <- setdiff(non_sparse_indices, oligogenic_indices)
+
+    # Select n_inf SNPs from the infinitesimal pool if n_inf is specified
+    if (!is.null(n_inf)) {
+      n_inf_actual <- min(n_inf, length(infinitesimal_pool))
+      infinitesimal_indices <- sample(infinitesimal_pool, n_inf_actual)
+    } else {
+      # Default behavior: all remaining SNPs get infinitesimal effects
+      infinitesimal_indices <- infinitesimal_pool
+    }
+
     beta_inf <- simulate_infinitesimal_effects(G, h2_infinitesimal, infinitesimal_indices,
                                                inf_sd)
 
@@ -289,34 +287,25 @@ generate_cis_qtl_data <- function(G,
     if (independent) {
       ld_satisfied <- TRUE  # Assume satisfied unless violations found
 
-      # Check sparse SNPs: |r| < 0.15
+      # Check sparse SNPs: |r| < ld_threshold
       if (length(sparse_indices) > 1) {
         sparse_cor <- cor(G[, sparse_indices, drop = FALSE])
-        high_ld_sparse <- which(abs(sparse_cor) >= 0.15 & upper.tri(sparse_cor, diag = FALSE), arr.ind = TRUE)
-
-        if (nrow(high_ld_sparse) > 0) {
-          ld_satisfied <- FALSE
-        }
+        high_ld_sparse <- which(abs(sparse_cor) >= ld_threshold & upper.tri(sparse_cor, diag = FALSE), arr.ind = TRUE)
+        if (nrow(high_ld_sparse) > 0) ld_satisfied <- FALSE
       }
 
-      # Check oligogenic SNPs: |r| < 0.15 (changed from 0.30)
+      # Check oligogenic SNPs: |r| < ld_threshold
       if (ld_satisfied && length(oligogenic_indices) > 1) {
         oligo_cor <- cor(G[, oligogenic_indices, drop = FALSE])
-        high_ld_oligo <- which(abs(oligo_cor) >= 0.15 & upper.tri(oligo_cor, diag = FALSE), arr.ind = TRUE)
-
-        if (nrow(high_ld_oligo) > 0) {
-          ld_satisfied <- FALSE
-        }
+        high_ld_oligo <- which(abs(oligo_cor) >= ld_threshold & upper.tri(oligo_cor, diag = FALSE), arr.ind = TRUE)
+        if (nrow(high_ld_oligo) > 0) ld_satisfied <- FALSE
       }
 
-      # Check between sparse and oligogenic: |r| < 0.15
+      # Check between sparse and oligogenic: |r| < ld_threshold
       if (ld_satisfied && length(sparse_indices) > 0 && length(oligogenic_indices) > 0) {
         cross_cor <- cor(G[, sparse_indices, drop = FALSE], G[, oligogenic_indices, drop = FALSE])
-        high_ld_cross <- which(abs(cross_cor) >= 0.15, arr.ind = TRUE)
-
-        if (nrow(high_ld_cross) > 0) {
-          ld_satisfied <- FALSE
-        }
+        high_ld_cross <- which(abs(cross_cor) >= ld_threshold, arr.ind = TRUE)
+        if (nrow(high_ld_cross) > 0) ld_satisfied <- FALSE
       }
     } else {
       # If not independent, accept
@@ -324,45 +313,16 @@ generate_cis_qtl_data <- function(G,
     }
   }
 
-  # Report LD constraint results
+  # Warn if LD constraints not satisfied
   if (independent && !ld_satisfied) {
-    msg <- paste0("Failed to satisfy LD constraints after ",
-                  max_attempts, " attempts. Returning last generated data with LD violations.")
-    warning(msg)
-    if (verbose) {
-      cat("\n", msg, "\n")
-      # Report actual LD values
-      if (length(sparse_indices) > 1) {
-        sparse_cor <- cor(G[, sparse_indices, drop = FALSE])
-        max_sparse_cor <- max(abs(sparse_cor[upper.tri(sparse_cor)]))
-        cat("  Final max |r| among sparse SNPs:", round(max_sparse_cor, 4),
-            ifelse(max_sparse_cor < 0.15, "✓", "✗ (constraint: < 0.15)"), "\n")
-      }
-      if (length(oligogenic_indices) > 1) {
-        oligo_cor <- cor(G[, oligogenic_indices, drop = FALSE])
-        max_oligo_cor <- max(abs(oligo_cor[upper.tri(oligo_cor)]))
-        cat("  Final max |r| among oligogenic SNPs:", round(max_oligo_cor, 4),
-            ifelse(max_oligo_cor < 0.15, "✓", "✗ (constraint: < 0.15)"), "\n")
-      }
-      if (length(sparse_indices) > 0 && length(oligogenic_indices) > 0) {
-        cross_cor <- cor(G[, sparse_indices, drop = FALSE], G[, oligogenic_indices, drop = FALSE])
-        max_cross_cor <- max(abs(cross_cor))
-        cat("  Final max |r| between sparse and oligogenic:", round(max_cross_cor, 4),
-            ifelse(max_cross_cor < 0.15, "✓", "✗ (constraint: < 0.15)"), "\n")
-      }
-    }
-  } else if (verbose && independent) {
-    if (attempt == 1) {
-      cat("✓ LD constraints satisfied on first attempt!\n")
-    } else {
-      cat("✓ LD constraints satisfied after", attempt, "attempts.\n")
-    }
+    warning(paste0("Failed to satisfy LD constraints after ", max_attempts,
+                   " attempts. Returning last generated data with LD violations."))
   }
 
-  # Calculate causal indices using power-based identification
+  # Calculate causal indices using power-based identification (non-central chi-square with Bonferroni correction)
   causal_indices <- is_causal_power(G, beta, var_epsilon, power = 0.80)
 
-  # Calculate empirical heritability for each component (final data)
+  # Calculate empirical heritability for each component
   var_y <- var(y)
   h2_sparse_actual <- var(as.vector(G[, sparse_indices] %*% beta[sparse_indices])) / var_y
   h2_oligogenic_actual <- var(as.vector(G[, oligogenic_indices] %*% beta[oligogenic_indices])) / var_y
@@ -371,8 +331,7 @@ generate_cis_qtl_data <- function(G,
 
   return(list(
     G = G,
-    y.ori = y,
-    y = scale(y),
+    y = y,
     beta = beta,
     h2g = h2g_actual,
     h2_sparse = h2_sparse_actual,

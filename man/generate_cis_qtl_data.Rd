@@ -2,28 +2,30 @@
 % Please edit documentation in R/simulate_eQTL.R
 \name{generate_cis_qtl_data}
 \alias{generate_cis_qtl_data}
-\title{Generate Cis-QTL Data with Multiple Genetic Architecture Components}
+\title{Generate eQTL Data with Multiple Genetic Architecture Components}
 \usage{
 generate_cis_qtl_data(
   G,
-  h2g = 0.3,
+  h2g = 0.25,
   prop_h2_sparse = 0.5,
-  prop_h2_oligogenic = 0.15,
-  prop_h2_infinitesimal = 0.35,
+  prop_h2_oligogenic = 0.35,
+  prop_h2_infinitesimal = 0.15,
   n_sparse = 2,
-  n_oligogenic = 10,
+  n_oligogenic = 5,
+  n_inf = 15,
   mixture_props = c(0.75, 0.25),
   sparse_sd = 0.5,
   oligo_sds = c(0.05, 0.15),
   inf_sd = 0.01,
   standardize = TRUE,
   independent = TRUE,
-  verbose = FALSE,
+  ld_threshold = 0.15,
+  max_attempts = 200,
   seed = NULL
 )
 }
 \arguments{
-\item{G}{Genotype matrix.}
+\item{G}{Standardized genotype matrix (samples x SNPs).}
 
 \item{h2g}{Total SNP heritability (proportion of variance explained by genotyped SNPs).}
 
@@ -37,6 +39,8 @@ generate_cis_qtl_data(
 
 \item{n_oligogenic}{Number of oligogenic SNPs to simulate.}
 
+\item{n_inf}{Number of infinitesimal SNPs to simulate. If NULL (default), all remaining SNPs after sparse and oligogenic selection receive infinitesimal effects.}
+
 \item{mixture_props}{Mixture proportions for oligogenic effects (must sum to 1). Default c(0.75, 0.25) means 75% smaller effects, 25% larger effects.}
 
 \item{sparse_sd}{Standard deviation for drawing sparse effects (default 0.5).}
@@ -47,9 +51,11 @@ generate_cis_qtl_data(
 
 \item{standardize}{Logical; if TRUE, the genotype matrix will be standardized.}
 
-\item{independent}{Logical; if TRUE, ensures all sparse and oligogenic SNPs have |r| < 0.15 with each other (default FALSE).}
+\item{independent}{Logical; if TRUE, ensures all sparse and oligogenic SNPs have |r| < ld_threshold with each other (default TRUE).}
 
-\item{verbose}{Logical; if TRUE, prints progress messages including LD constraint attempts (default FALSE).}
+\item{ld_threshold}{Numeric; maximum allowed absolute correlation between causal variants when independent = TRUE (default 0.15).}
+
+\item{max_attempts}{Integer; maximum number of attempts to find SNPs satisfying LD constraints (default 200).}
 
 \item{seed}{Optional seed for reproducibility.}
 }
@@ -59,10 +65,5 @@ A list containing the standardized genotype matrix, simulated phenotype,
   effect size ranges, hierarchy validation results, and causal indices.
 }
 \description{
-This function generates simulated cis-eQTL data with a partitioned
-genetic architecture that enforces strict effect size hierarchies:
-|sparse| > |oligogenic| >> |infinitesimal|
-}
-\details{
-Originally developed for the "susieR 2.0" manuscript, McCreight et al (2025).
+This function generates simulated gene expression data
 }

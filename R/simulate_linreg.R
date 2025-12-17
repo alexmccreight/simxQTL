@@ -471,3 +471,103 @@ sim_single_trait_simple <- function(G, A, phi_v) {
 
     return(Y)
 }
+
+#' Select Causal Variants from Genotype Matrix
+#'
+#' Randomly selects causal SNP indices with optional LD constraints.
+#'
+#' @param X Genotype matrix (individuals x SNPs).
+#' @param n_causal Number of causal variants to select.
+#' @param independent Logical; if TRUE, enforces low LD among causal variants.
+#' @param ld_threshold Numeric; maximum allowed absolute correlation between causal variants (used only if independent = TRUE).
+#'
+#' @return A vector of causal variant indices.
+#' @keywords internal
+select_causal_variants <- function(X, n_causal, independent = FALSE, ld_threshold = 0.15) {
+  if (!is.matrix(X)) stop("Input X must be a numeric matrix.")
+  if (n_causal > ncol(X)) stop("n_causal cannot exceed number of SNPs in X.")
+  if (n_causal == 1) return(sample(1:ncol(X), size = 1))
+
+  LD_vars <- 1
+
+  if (independent) {
+    # Select approximately independent variants (low LD)
+    while (length(LD_vars) != 0) {
+      vars <- sample(1:ncol(X), size = n_causal)
+      cor_mat <- cor(X[, vars])
+      LD_vars <- which(colSums(abs(cor_mat) > ld_threshold) > 1)
+    }
+  } else {
+    # Avoid perfectly correlated variants (exact duplicates)
+    while (length(LD_vars) != 0) {
+      vars <- sample(1:ncol(X), size = n_causal)
+      cor_mat <- cor(X[, vars])
+      LD_vars <- which(colSums(abs(cor_mat) == 1) > 1)
+    }
+  }
+
+  return(vars)
+}
+
+#' Simulate Phenotype with Controllable Per-SNP Heritability
+#'
+#' Simulates a phenotype based on genotype data with specified per-SNP heritability.
+#' Causal variants can be constrained to be approximately independent (low LD).
+#'
+#' @param X Standardized genotype matrix (individuals x SNPs).
+#' @param n_causal Number of causal variants.
+#' @param h2_per_snp Desired heritability per causal SNP (e.g., 0.01).
+#' @param independent Logical; if TRUE, causal SNPs are chosen to be approximately independent (low LD).
+#'
+#' @return A list containing:
+#'   \item{G}{The input genotype matrix.}
+#'   \item{y}{Phenotype vector.}
+#'   \item{beta}{Vector of true effect sizes.}
+#'   \item{causal}{Indices of causal variants.}
+#'   \item{h2_total}{Total heritability (h2_per_snp * n_causal).}
+#'   \item{h2_per_snp}{Per-SNP heritability used.}
+#'   \item{residual_variance}{Residual variance of the phenotype.}
+#' @export
+#'
+#' @examples
+#' G <- matrix(rbinom(1000, 2, 0.5), nrow = 100, ncol = 10)
+#' G <- scale(G)
+#' result <- simulate_phenotype(G, n_causal = 3, h2_per_snp = 0.05)
+simulate_phenotype <- function(X, n_causal = 5, h2_per_snp = 0.01, independent = TRUE) {
+
+  # --- Step 1: Choose causal variants with LD constraint
+  causal_idx <- select_causal_variants(X, n_causal = n_causal, independent = independent)
+
+  # --- Step 2: Compute total heritability from per-SNP heritability
+  h2_total <- h2_per_snp * n_causal
+
+  # --- Step 3: Simulate effect sizes
+  beta <- rep(0, ncol(X))
+  beta[causal_idx] <- 1
+
+  # --- Step 4: Simulate phenotype using total heritability
+  pheno <- sim_multi_traits(
+    G = X,
+    B = as.matrix(beta),
+    h2g = h2_total,
+    is_h2g_total = TRUE
+  )
+
+  y <- drop(pheno$P)
+
+  # --- Step 5: Calculate residual variance
+  var_y <- var(y)
+  var_genetic <- var_y * h2_total
+  var_residual <- var_y * (1 - h2_total)
+
+  # --- Step 6: Return all components
+  list(
+    G = X,
+    y = y,
+    beta = beta,
+    causal = causal_idx,
+    h2_total = h2_total,
+    h2_per_snp = h2_per_snp,
+    residual_variance = var_residual
+  )
+}
